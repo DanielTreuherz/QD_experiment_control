@@ -21,7 +21,6 @@ class Agilent33600A(AWG.GenericAWG):
 
 awg=Agilent33600A(ip)
 
-print(awg.set_function("arb", 2))
+awg.set_amplitude(1.2, channel=1)
 
-awg.write()
 awg.close()
