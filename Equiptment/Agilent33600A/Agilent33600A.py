@@ -29,6 +29,10 @@ class Agilent33600A(AWG.GenericAWG):
         visa_instr.timeout = 20_000          # ms
         visa_instr.chunk_size = 4 * 1024 * 1024  # 4 MB safe value
 
+
+    def clear_arbritrary(self, channel):
+        self.write(f"SOUR{channel}:DATA:VOL:CLE")
+
     def upload_custom_waveform(self, name, waveform, channel=1):
         """
         Upload a custom waveform to the specified channel.
@@ -46,7 +50,7 @@ class Agilent33600A(AWG.GenericAWG):
         # 1. Setup
         self.write("DISP:TEXT 'Uploading ARB'")
         self.write("FORM:BORD SWAP")
-        self.write(f"SOUR{channel}:DATA:VOL:CLE")
+        self.clear_arbritrary(channel)
 
         # 2. Manual binary upload
         byte_count = len(payload)
@@ -60,7 +64,7 @@ class Agilent33600A(AWG.GenericAWG):
         self.write("*WAI")
 
         # 3. Configure waveform
-        self.write(f"SOUR{channel}:FUNC:ARB {name}")
+
         self.write("DISP:TEXT ''")
 
     def set_sample_rate(self, sample_rate, channel=1):
@@ -74,9 +78,33 @@ class Agilent33600A(AWG.GenericAWG):
         self.write("*WAI")
         self.write(f"SOUR{channel}:FUNC:ARB:SRAT {sample_rate}")
 
+    def set_sample_rate(self, sample_rate, channel=1):
+        """
+        Set the sample rate for a specified channel.
+
+        Args:
+            sample_rate (float): Sample rate in Sa/s.
+            channel (int, optional): Channel number. Default is 1.
+        """
+        self.write("*WAI")
+        self.write(f"SOUR{channel}:FUNC:ARB:SRAT {sample_rate}")
+
+    def arb_phase_sync(self):
+        """
+        Not too sure what function is - comes from A33ArbPhaseSync.vi
+        """
+        self.write(":FUNC:ARB:SYNC;")
+
+    def set_amplitude_modulation(self, channel, on_off):
+        cmd = f"sour{channel}:AM:STAT {"ON" if on_off else "OFF"}"
+
+    
+
+
+
 
 if __name__=="__main__":
-    num_points = 4e6
+    num_points = 4e4
     sample_rate = 1e6
     t = np.linspace(0, 1, int(num_points))
     
@@ -87,10 +115,10 @@ if __name__=="__main__":
     awg = Agilent33600A(ip)
 
     # awg.upload_custom_waveform('test', sig)
-    # awg.set_function('sine')
-    # awg.set_frequency(10000)
-    # # awg.set_sample_rate(sample_rate)
-    print(awg.is_output_enabled(channel=1))
+    # awg.set_function('arb')
+    # awg.set_sample_rate(sample_rate)
+
+    awg.write(":FUNC:ARB:SYNC;")
 
     awg.close()
 

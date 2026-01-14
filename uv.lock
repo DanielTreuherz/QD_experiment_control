@@ -338,6 +338,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "numpy" },
     { name = "psutil" },
+    { name = "pyft232" },
     { name = "pylablib" },
     { name = "pyqt5" },
     { name = "pyvisa" },

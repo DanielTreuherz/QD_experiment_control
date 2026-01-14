@@ -11,6 +11,7 @@ dependencies = [
     "scipy==1.16.3",
     "pylablib==1.4.4",
     "pyqt5==5.15.11",
+    "pyft232>=0.12",
     "pyzmq>=27.1.0",
 ]
 
