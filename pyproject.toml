@@ -13,6 +13,8 @@ dependencies = [
     "pyqt5==5.15.11",
     "pyft232>=0.12",
     "pyzmq>=27.1.0",
+    "pydantic>=2.12.5",
+    "streamlit>=1.53.0",
 ]
 
 [tool.uv]
