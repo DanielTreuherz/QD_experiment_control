@@ -1,9 +1,9 @@
 from pylablib.devices import AWG
 import numpy as np
 import time
-from typing import Literal, Annotated, Union, Iterable, TextIO, BinaryIO
-import re
-from pydantic import validate_call, Field, conint, confloat
+from typing import Literal, Annotated, Union, TextIO, BinaryIO
+
+from pydantic import validate_call, Field
 import os
 import streamlit as st
 
@@ -486,19 +486,19 @@ class Agilent33600A(AWG.GenericAWG):
 
 
 if __name__=="__main__":
-    num_points = 13e6
-    x = np.arange(num_points)
-    data = 1e4*(np.sin(17 * x * (2*np.pi/num_points)) +  np.sin(6 * x * (2 * np.pi /num_points)))
-    np.savetxt(r'C:\Users\dt360\Documents\GitHub\QD_experiment_control\test_data.txt', data, fmt='%d')
+    # num_points = 13e6
+    # x = np.arange(num_points)
+    # data = 1e4*(np.sin(17 * x * (2*np.pi/num_points)) +  np.sin(6 * x * (2 * np.pi /num_points)))
+    # np.savetxt(r'C:\Users\dt360\Documents\GitHub\QD_experiment_control\test_data.txt', data, fmt='%d')
 
 
-    with Agilent33600A("TCPIP::169.254.11.23::INSTR") as awg:
-        awg.A33ClearArbitrary(1)
-        awg.A33ClearArbitrary(2)
+    # with Agilent33600A("TCPIP::169.254.11.23::INSTR") as awg:
+    #     awg.A33ClearArbitrary(1)
+    #     awg.A33ClearArbitrary(2)
     
-        with open(r'C:\Users\dt360\Documents\GitHub\QD_experiment_control\test_data.txt') as f:
-            # with Agilent33600A("TCPIP::169.254.11.23::INSTR") as awg:
-            awg.load_split_and_upload_dac(f,1)
+    #     with open(r'C:\Users\dt360\Documents\GitHub\QD_experiment_control\test_data.txt') as f:
+    #         # with Agilent33600A("TCPIP::169.254.11.23::INSTR") as awg:
+    #         awg.load_split_and_upload_dac(f,1)
             
 
 #     st.set_page_config(page_title="Agilent 33600A Controller", layout="wide")

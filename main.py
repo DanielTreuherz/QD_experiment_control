@@ -45,10 +45,13 @@ with ExitStack() as stack:
             
         except Exception as e:
             print(f'Error: {e}')
-            print('Json message leading to eror')
+            print('Json message:')
+            print(message)
+            print('lead to an error')
             print(message)
             traceback.print_exc()
-            socket.send_string('Failed')
+            socket.send_string(f'ERROR {e}')
+
             run=False
 
 print('Connections closed.')
