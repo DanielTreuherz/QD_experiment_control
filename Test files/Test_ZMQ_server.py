@@ -7,6 +7,7 @@
 import time
 import zmq
 import traceback
+from pathlib import Path
 
 context = zmq.Context()
 socket = context.socket(zmq.REP)
@@ -20,6 +21,8 @@ while True:
         message = socket.recv_json()
         print("Received request: %s" % message)
         time.sleep(1)
+        if message['cmd']=='testPath':
+            print(Path(message['arg1']).parent)
 
         socket.send_string(f"Python succesfully received {message}")
     except zmq.Again:

@@ -6,6 +6,7 @@ from typing import Literal, Annotated, Union, TextIO, BinaryIO
 from pydantic import validate_call, Field
 import os
 import streamlit as st
+from core import get_public_commands
 
 os.environ["PYVISA_LIBRARY"] = "@py"
 
@@ -24,6 +25,10 @@ class Agilent33600A(AWG.GenericAWG):
         visa_instr.timeout = 10_000
         visa_instr.chunk_size = 4 * 1024 * 1024
 
+        self.commands = get_public_commands(self)
+        
+#Unused - delivers arb waveform as floats rather than ints which means it doens't
+# use the full range of the DAC
     # def _upload_custom_waveform_binary(self, name, waveform, channel=1):
     #     waveform = np.asarray(waveform, dtype=np.float32)
     #     payload = waveform.tobytes()
@@ -113,316 +118,6 @@ class Agilent33600A(AWG.GenericAWG):
             f"Failed to upload ARB waveform after {max_attempts} attempts. Last error: {last_err}"
         )
 
-
-    # -----------------------------------------------------------------------
-    # Registered Commands
-    # -----------------------------------------------------------------------
-
-    @validate_call
-    def A33ArbPhaseSync(self):
-        """Syncs Arb phase."""
-        self.write(":FUNC:ARB:SYNC;")
-
-    @validate_call
-    def A33ClearArbitrary(self, channel: ChannelType):
-        """Clears volatile memory for the specified channel."""
-        self.write(f"SOUR{channel}:DATA:VOL:CLE")
-        self.ask("*OPC?")
-
-    @validate_call
-    def A33ConfigureAM(
-        self, 
-        channel: ChannelType, 
-        am_source: Annotated[int, Field(ge=0, le=3)], # ['INT','EXT','CH1','CH2']
-        modulation_waveform: Annotated[int, Field(ge=0, le=7)], # ['SIN','SQU'...]
-        modulation_frequency: Annotated[float, Field(gt=0)], 
-        enable_carrier_supression: bool, 
-        enable_amplitude_modulation: bool, 
-        modulation_depth: Annotated[float, Field(ge=0, le=120)]
-    ):
-        sources_str = ['INT','EXT','CH1','CH2'][am_source]
-        waveforms_str = ['SIN','SQU','TRI','RAMP','NRAM','NOIS','PRBS','ARB'][modulation_waveform]
-        
-        cmd = f"SOUR{channel}:AM:STAT {'ON' if enable_amplitude_modulation else 'OFF'};"
-        cmd+= f":SOUR{channel}:AM:SOUR {sources_str};"
-
-        if am_source == 0: # INT
-            cmd += f":SOUR{channel}:AM:INT:FUNC {waveforms_str};"
-            cmd += f":SOUR{channel}:AM:INT:FREQ {modulation_frequency:#.12g};"
-
-        cmd+= f":SOUR{channel}:AM:DEPT {modulation_depth:#.12g};"
-        cmd+= f":SOUR{channel}:AM:DSSC {'ON' if enable_carrier_supression else 'OFF'};"
-
-        self.write(cmd)
-
-    @validate_call
-    def A33ConfigureARB(
-        self, 
-        channel: ChannelType, 
-        arb_number: int, 
-        amplitude: Annotated[float, Field(ge=0)], 
-        f_sr_p: Annotated[int, Field(ge=0, le=2)], # ["FREQ", "SRAT", "PER"]
-        phase: Annotated[float, Field(ge=-360, le=360)], 
-        filter_key: Annotated[int, Field(ge=0, le=2)], # ["OFF", "STEP", "NORM"]
-        dc_offset: float, 
-        advance_mode: bool, # 0=SRAT, 1=TRIG
-        freq_sample_rate_period: Annotated[float, Field(gt=0)] 
-    ):
-        if arb_number > 0:
-            arb_string = f'{arb_number}:.0f'
-        else:
-            arb_string = f'"INT:\\332XX_ARBS\\ARBF{abs(arb_number):.0f}.ARB"'
-        
-        cmd = f':SOUR{channel}:FUNC:ARB ARB{arb_string};:'
-        cmd += f'SOUR{channel}:FUNC ARB;:'
-        cmd += f'SOUR{channel}:FUNC ARB:FILT {["OFF", "STEP", "NORM"][filter_key]};:'
-        cmd += f'SOUR{channel}:FUNC ARB:ADV {"TRIG" if advance_mode else "SRAT"};:'
-        cmd += f'SOUR{channel}:VOLT {amplitude:#.12g};:'
-        cmd += f'SOUR{channel}:VOLT:OFFS {dc_offset:#.12g};:'
-        cmd += f'SOUR{channel}:FUNC ARB:{["FREQ", "SRAT", "PER"][f_sr_p]} {freq_sample_rate_period:#.12g};:'
-        
-        if (phase >= -360) and (phase < 360):
-            cmd += f'SOUR{channel}:PHASE:ARB {phase:#.12g};:'
- 
-        self.write(cmd)
-
-    @validate_call
-    def A33ConfigureBurst(
-        self, 
-        channel: ChannelType, 
-        burst_mode: bool, # 0=Triggered, 1=Gated
-        burst_phase: Annotated[float, Field(ge=-360, le=360)], 
-        burst_count: Annotated[int, Field(ge=1)], 
-        gate_polarity: bool, # 0=Norm, 1=Inv
-        internal_period: Annotated[float, Field(gt=0)], 
-        enable_burst: bool
-    ):
-        if enable_burst:
-            if burst_mode: # Gated
-                cmd = f'SOUR{channel}:BURS:MODE GAT;:'
-                cmd += f'SOUR{channel}:BURS:GATE:POL {"INV" if gate_polarity else "NORM"};:'
-                cmd += f'SOUR{channel}:BURS:INT:PER {internal_period:#.12g};:'
-            else: # Triggered
-                cmd = f'SOUR{channel}:BURS:MODE TRIG;:'
-                cmd += f'SOUR{channel}:BURS:PHAS {burst_phase:#.12g};:'
-                cmd += f'SOUR{channel}:BURS:NCYC {burst_count:.0f};:'
-            
-            cmd += f'SOUR{channel}:BURS:STAT ON'
-        else:
-            cmd = f'SOUR{channel}:BURS:STAT OFF'
-        self.write(cmd)
-
-    @validate_call
-    def A33ConfigureFM(
-        self, 
-        channel: ChannelType, 
-        enable_frequency_modulation: bool, 
-        fm_source: Annotated[int, Field(ge=0, le=3)], # ['INT', 'EXT', 'CH1', 'CH2']
-        modulation_waveform: Annotated[int, Field(ge=0, le=7)], 
-        modulation_deviation: Annotated[float, Field(ge=0)], 
-        modulation_frequency: Annotated[float, Field(gt=0)] 
-    ):
-        modulation_waveform_str = ['SIN', 'SQU', 'TRI', 'RAMP', 'NRAM', 'NOIS', 'PRBS', 'ARB'][modulation_waveform]
-        fm_source_str = ['INT', 'EXT', 'CH1', 'CH2'][fm_source]
-
-        if enable_frequency_modulation:
-            cmd = f'SOUR{channel}:FM:STAT ON;:'
-            cmd += f'SOUR{channel}:FM:SOUR {fm_source_str};:' 
-
-            if fm_source_str == 'INT':
-                cmd += f'SOUR{channel}:FM:INT:FUNC {modulation_waveform_str};:'
-                cmd += f'SOUR{channel}:FM:INT:FREQ {modulation_frequency:#.12g};:'
-            cmd += f'SOUR{channel}:FM:DEV {modulation_deviation:#.12g};'
-            
-        else:
-            cmd = f'SOUR{channel}:FM:STAT OFF;:'
-        
-        self.write(cmd)
-
-    @validate_call
-    def A33ConfigureFSweep(
-        self, 
-        channel: ChannelType, 
-        enable_frequency_sweep: bool, 
-        sweep_spacing: Annotated[int, Field(ge=0, le=1)], # ['LIN', 'LOG']
-        sweep_time: Annotated[float, Field(gt=0)], 
-        hold_time: Annotated[float, Field(ge=0)], 
-        return_time: Annotated[float, Field(ge=0)], 
-        start_frequency: Annotated[float, Field(ge=0)], 
-        stop_frequency: Annotated[float, Field(ge=0)] 
-    ):
-        sweep_spacing_str = ['LIN', 'LOG'][sweep_spacing]
-
-        if enable_frequency_sweep:
-            cmd = f':SWE{channel}:STAT ON;:'
-            cmd += f'SWE{channel}:SPAC {sweep_spacing_str};:'
-            cmd += f'SWE{channel}:TIME {sweep_time:#.7g};:'
-            cmd += f'FREQ{channel}:STAR {start_frequency:#.12g};:'
-            cmd += f'FREQ{channel}:STOP {stop_frequency:#.12g};:'
-            cmd += f'SWE{channel}:HTIME {hold_time:#.7g};:'
-            cmd += f'SWE{channel}:RTIME {return_time:#.7g};'            
-        else:
-            cmd = f':SWE{channel}:STAT OFF;'
-        
-        self.write(cmd.upper())
-
-    @validate_call
-    def A33ConfigurePulse(
-        self, 
-        channel: ChannelType, 
-        pulse_period: Annotated[float, Field(gt=0)], 
-        pulse_width: Annotated[float, Field(gt=0)], 
-        leading_edge: Annotated[float, Field(gt=0)], 
-        trailing_edge: Annotated[float, Field(gt=0)] 
-    ):
-        cmd = f':SOUR{channel}:FUNC:PULS:PER {pulse_period:#.12g};:'
-        cmd += f'SOUR{channel}:FUNC:PULS:WIDT {pulse_width:#.12g};:'
-        cmd += f'SOUR{channel}:FUNC:PULS:TRAN:LEAD {leading_edge:#.12g};:'
-        cmd += f'SOUR{channel}:FUNC:PULS:TRAN:TRA {trailing_edge:#.12g};'
-        
-        self.write(cmd)
-
-    @validate_call
-    def A33ConfigureTrigger(
-        self, 
-        channel: ChannelType, 
-        trigger_source: Annotated[int, Field(ge=0, le=3)], # ['IMM', 'TIM', 'EXT', 'BUS']
-        trigger_slope: Annotated[int, Field(ge=0, le=1)], # ['POS', 'NEG']
-        delay: Annotated[float, Field(ge=0)], 
-        int_period: Annotated[float, Field(gt=0)], 
-        trigger_level: float 
-    ):
-        trigger_source_str = ['IMM', 'TIM', 'EXT', 'BUS'][trigger_source]
-        trigger_slope_str = ['POS', 'NEG'][trigger_slope]        
-
-        cmd = f':TRIG{channel}: SOUR {trigger_source_str};:'
-        cmd += f'TRIG{channel}:SLOP {trigger_slope_str};:'
-        cmd += f'TRIG{channel}:DEL {delay:#.12g};:'
-        cmd += f'TRIG{channel}:TIM {int_period:#.12g};:'
-        cmd += f'TRIG{channel}:LEV {trigger_level:#.12g};'
-        
-        self.write(cmd)
-
-    @validate_call
-    def A33ConfigureWFM(
-        self, 
-        channel: ChannelType, 
-        waveform: Annotated[int, Field(ge=0, le=7)], # ['SIN'...'TRI']
-        amplitude: Annotated[float, Field(ge=0)], 
-        dc_offset: float, 
-        frequency_bw_bitrate: Annotated[float, Field(gt=0)], 
-        phase: Annotated[float, Field(ge=-360, le=360)]
-    ):
-        waveform_str = ['SIN','SQU','PULS','RAMP','NOIS','DC','PRBS','TRI'][waveform]
-        
-        cmd = f':SOUR{channel}:FUNC {waveform_str};:'
-
-        if waveform_str != 'DC':
-            cmd += f'SOUR{channel}:VOLT {amplitude:#.12g};:'
-        
-        cmd += f'SOUR{channel}:VOLT:OFFS {dc_offset:#.12g};:'
-        
-        if waveform_str == 'NOIS':
-            cmd += f'SOUR{channel}:FUNC NOISE:BAND {frequency_bw_bitrate:#.12g};:'  
-        elif waveform_str == 'PRBS':
-            cmd += f'SOUR{channel}:FUNC:PRBS:BRAT {frequency_bw_bitrate:#.12g};:'
-        else:
-            cmd += f'SOUR{channel}:FREQ {frequency_bw_bitrate:#.12g};:'
-
-        if waveform_str not in ['NOIS', 'DC']:        
-            cmd += f'SOUR{channel}:PHASE {phase:#.12g};'
-        
-        self.write(cmd)
-
-    @validate_call
-    def A33Initialize(self, reset: bool): 
-        if reset:
-            self.write('*RST')
-            time.sleep(0.5)
-        self.write('*CLS;*ESE 1;*SRE 32;')
-        time.sleep(0.5)        
-        self.write('*WAI')
-        time.sleep(0.5)
-        self.write(':ROSCillator:SOURce:AUTO  ON;')
-
-    @validate_call
-    def A33OutputOnOff(
-        self, 
-        channel: ChannelType, 
-        enable_output: bool, 
-        output_mode: bool, # 0=NORM, 1=GATED
-        polarity: bool, # 0=NORM, 1=INV
-        impedance: Annotated[float, Field(gt=0)] 
-    ):
-        polarity_str = ['NORM', 'INV'][int(polarity)]
-        enable_output_str = ['OFF', 'ON'][int(enable_output)]
-        output_mode_str = ['NORM', 'GATED'][int(output_mode)]
-        
-        cmd = f':OUTP{channel}:LOAD {impedance:#.12g};:'
-        cmd+= f'OUTP{channel}:POL {polarity_str};:'
-        cmd+= f'OUTP{channel}:MODE {output_mode_str};:'
-        cmd+= f'OUTP{channel} {enable_output_str};'
-        self.write(cmd)
-
-    @validate_call
-    def A33PhaseSync(self):
-        self.write(':SOUR1:PHASE:SYNC;')
-
-    @validate_call
-    def A33ReadError(self):  
-        err = self.ask('SYST:ERR?')
-        return err
-
-    @validate_call
-    def A33Trg(self):  
-        self.write('*TRG;')
-
-    @validate_call
-    def A33ConfigurePRBS(
-        self, 
-        channel: ChannelType, 
-        sequence_type: Annotated[int, Field(ge=0)], 
-        edge: Annotated[float, Field(gt=0)] 
-    ):  
-        cmd = f':SOUR{channel}:FUNC:PRBS:DATA PN{sequence_type:.0f};:'
-        cmd+= f'SOUR{channel}:FUNC:PRBS:TRAN {edge:#.12g};' 
-        self.write(cmd)
-
-    @validate_call    
-    def A33ConfigureRamp(
-        self,
-        channel : ChannelType,
-        ramp_symmetry: Annotated[float, Field(ge=0, le=100)]    
-        ):
-        cmd = f':SOUR{channel}:FUNC:RAMP:SYMM {ramp_symmetry:#.12g};'
-        self.write(cmd)
-
-    @validate_call
-    def A33ConfigureSquare(
-        self,
-        channel : ChannelType,
-        duty_cycle: Annotated[float, Field(ge=0, le=100)]    
-            ):
-        cmd = f':SOUR{channel}:FUNC:SQU:DCYC {duty_cycle};'
-        self.write(cmd)
-        
-    @validate_call
-    def A33LoadARB(self, channel: ChannelType, arb_number: int):
-        visa = self.instr.instr
-        old_timeout = visa.timeout
-        
-        # Build command with *OPC? for synchronization
-        cmd = f':MMEM:LOAD:DATA{channel} "INT:\\332XX_ARBS\\ARBF{arb_number}.ARB";*OPC?'
-        
-        self.write(cmd)
-        visa.timeout = 60_000 # 60s timeout for large file transfer
-        
-        # Read blocks until *OPC? returns '1'
-        response = visa.read()
-        visa.timeout = old_timeout
-        return response
-    
-
     def load_split_and_upload_dac(
         self,
         data: Union[str, np.ndarray, TextIO, BinaryIO],
@@ -444,6 +139,12 @@ class Agilent33600A(AWG.GenericAWG):
             Output channel.
         chunk_size : int
             Number of points per chunk (default: 4M).
+            
+        #Works best if you first clear both channels.
+        awg.A33ClearArbitrary(1)
+        awg.A33ClearArbitrary(2)
+        awg.load_split_and_upload_dac(f,1)
+            
         """
 
         # ---- Load data ---------------------------------------------------------
@@ -482,10 +183,338 @@ class Agilent33600A(AWG.GenericAWG):
                 channel=channel,
             )
             time.sleep(5)
+    # -----------------------------------------------------------------------
+    # Registered Commands
+    # -----------------------------------------------------------------------
+
+    @validate_call
+    def A33ArbPhaseSync(self):
+        """Syncs Arb phase."""
+        self.write(":FUNC:ARB:SYNC;")
+
+    @validate_call
+    def A33ClearArbitrary(self, channel: ChannelType):
+        """Clears volatile memory for the specified channel."""
+        self.write(f"SOUR{channel}:DATA:VOL:CLE;")
+        # self.ask("*OPC?")
+
+    @validate_call
+    def A33ConfigureAM(
+        self, 
+        channel: ChannelType, 
+        am_source: Annotated[int, Field(ge=0, le=3)], # ['INT','EXT','CH1','CH2']
+        modulation_waveform: Annotated[int, Field(ge=0, le=7)], # ['SIN','SQU'...]
+        modulation_frequency: Annotated[float, Field(gt=0)], 
+        enable_carrier_suppression: bool, 
+        enable_amplitude_modulation: bool, 
+        modulation_depth: Annotated[float, Field(ge=0, le=120)]
+    ):
+        sources_str = ['INT','EXT','CH1','CH2'][am_source]
+        waveforms_str = ['SIN','SQU','TRI','RAMP','NRAM','NOIS','PRBS','ARB'][modulation_waveform]
+        if enable_amplitude_modulation:
+            cmd = f"SOUR{channel}:AM:STAT ON;"
+            cmd+= f":SOUR{channel}:AM:SOUR {sources_str};"
+
+            if am_source == 0: # INT
+                cmd += f":SOUR{channel}:AM:INT:FUNC {waveforms_str};"
+                cmd += f":SOUR{channel}:AM:INT:FREQ {modulation_frequency:#.16g};"
+
+            cmd+= f":SOUR{channel}:AM:DEPT {modulation_depth:#.16g};"
+            cmd+= f":SOUR{channel}:AM:DSSC {'ON' if enable_carrier_suppression else 'OFF'};"
+        else:
+            cmd = cmd = f"SOUR{channel}:AM:STAT OFF;"
+        self.write(cmd)
+
+    @validate_call
+    def A33ConfigureARB(
+        self, 
+        channel: ChannelType, 
+        arb_number: int, 
+        amplitude: Annotated[float, Field(ge=0)], 
+        f_sr_p_key: Annotated[int, Field(ge=0, le=2)], # ["FREQ", "SRAT", "PER"]
+        phase: Annotated[float, Field(ge=-360, le=360)], 
+        filter_key: Annotated[int, Field(ge=0, le=2)], # ["OFF", "STEP", "NORM"]
+        dc_offset: float, 
+        advance_mode: bool, # 0=SRAT, 1=TRIG
+        freq_sample_rate_period: Annotated[float, Field(gt=0)] 
+    ):
+        if arb_number > 0:
+            arb_string = f"ARB{arb_number:.0f}"
+        else:
+            arb_string = f'"INT:\\332XX_ARBS\\ARBF{abs(arb_number)}.ARB"'
+        
+        cmd = f':SOUR{channel}:FUNC:ARB {arb_string};:'
+        cmd += f'SOUR{channel}:FUNC ARB;:'
+        cmd += f'SOUR{channel}:FUNC:ARB:FILT {["OFF", "STEP", "NORM"][filter_key]};:'
+        cmd += f'SOUR{channel}:FUNC:ARB:ADV {"TRIG" if advance_mode else "SRAT"};:'
+        cmd += f'SOUR{channel}:VOLT {amplitude:#.16g};:'
+        cmd += f'SOUR{channel}:VOLT:OFFS {dc_offset:#.16g};:'
+        cmd += f'SOUR{channel}:FUNC:ARB:{["FREQ", "SRAT", "PER"][f_sr_p_key]} {freq_sample_rate_period:#.16g};:'
+        
+        if (phase >= -360) and (phase < 360):
+            cmd += f'SOUR{channel}:PHASE:ARB {phase:#.16g};'
+ 
+        self.write(cmd)
+
+    @validate_call
+    def A33ConfigureBurst(
+        self, 
+        channel: ChannelType, 
+        burst_mode: bool, # 0=Triggered, 1=Gated
+        burst_phase: Annotated[float, Field(ge=-360, le=360)], 
+        burst_count: Annotated[int, Field(ge=1)], 
+        gate_polarity: bool, # 0=Norm, 1=Inv
+        internal_period: Annotated[float, Field(gt=0)], 
+        enable_burst: bool
+    ):
+        if enable_burst:
+            if burst_mode: # Gated
+                cmd = f'SOUR{channel}:BURS:MODE GAT;:'
+                cmd += f'SOUR{channel}:BURS:GATE:POL {"INV" if gate_polarity else "NORM"};:'
+                cmd += f'SOUR{channel}:BURS:INT:PER {internal_period:#.16g};:'
+            else: # Triggered
+                cmd = f'SOUR{channel}:BURS:MODE TRIG;:'
+                cmd += f'SOUR{channel}:BURS:PHAS {burst_phase:#.16g};:'
+                cmd += f'SOUR{channel}:BURS:NCYC {burst_count:.0f};:'
+            
+            cmd += f'SOUR{channel}:BURS:STAT ON'
+        else:
+            cmd = f'SOUR{channel}:BURS:STAT OFF'
+        self.write(cmd)
+
+    @validate_call
+    def A33ConfigureFM(
+        self, 
+        channel: ChannelType, 
+        enable_frequency_modulation: bool, 
+        fm_source: Annotated[int, Field(ge=0, le=3)], # ['INT', 'EXT', 'CH1', 'CH2']
+        modulation_waveform: Annotated[int, Field(ge=0, le=7)], 
+        modulation_deviation: Annotated[float, Field(ge=0)], 
+        modulation_frequency: Annotated[float, Field(gt=0)] 
+    ):
+        modulation_waveform_str = ['SIN', 'SQU', 'TRI', 'RAMP', 'NRAM', 'NOIS', 'PRBS', 'ARB'][modulation_waveform]
+        fm_source_str = ['INT', 'EXT', 'CH1', 'CH2'][fm_source]
+
+        if enable_frequency_modulation:
+            cmd = f'SOUR{channel}:FM:STAT ON;:'
+            cmd += f'SOUR{channel}:FM:SOUR {fm_source_str};:' 
+
+            if fm_source_str == 'INT':
+                cmd += f'SOUR{channel}:FM:INT:FUNC {modulation_waveform_str};:'
+                cmd += f'SOUR{channel}:FM:INT:FREQ {modulation_frequency:#.16g};:'
+            cmd += f'SOUR{channel}:FM:DEV {modulation_deviation:#.16g};'
+            
+        else:
+            cmd = f'SOUR{channel}:FM:STAT OFF;:'
+        
+        self.write(cmd)
+
+    @validate_call
+    def A33ConfigureFSweep(
+        self, 
+        channel: ChannelType, 
+        enable_frequency_sweep: bool, 
+        sweep_spacing: Annotated[int, Field(ge=0, le=1)], # ['LIN', 'LOG']
+        sweep_time: Annotated[float, Field(gt=0)], 
+        hold_time: Annotated[float, Field(ge=0)], 
+        return_time: Annotated[float, Field(ge=0)], 
+        start_frequency: Annotated[float, Field(ge=0)], 
+        stop_frequency: Annotated[float, Field(ge=0)] 
+    ):
+        sweep_spacing_str = ['LIN', 'LOG'][sweep_spacing]
+
+        if enable_frequency_sweep:
+            cmd = f':SWE{channel}:STAT ON;:'
+            cmd += f'SWE{channel}:SPAC {sweep_spacing_str};:'
+            cmd += f'SWE{channel}:TIME {sweep_time:#.10g};:'
+            cmd += f'FREQ{channel}:STAR {start_frequency:#.16g};:'
+            cmd += f'FREQ{channel}:STOP {stop_frequency:#.16g};:'
+            cmd += f'SWE{channel}:HTIME {hold_time:#.10g};:'
+            cmd += f'SWE{channel}:RTIME {return_time:#.10g};'            
+        else:
+            cmd = f':SWE{channel}:STAT OFF;'
+        
+        self.write(cmd.upper())
+
+    @validate_call
+    def A33ConfigurePRBS(
+        self, 
+        channel: ChannelType, 
+        sequence_type: Annotated[int, Field(ge=0)], 
+        edge: Annotated[float, Field(gt=0)] 
+        ):  
+        cmd = f':SOUR{channel}:FUNC:PRBS:DATA PN{sequence_type:.0f};:'
+        cmd+= f'SOUR{channel}:FUNC:PRBS:TRAN {edge:#.16g};' 
+        self.write(cmd)
+
+    @validate_call
+    def A33ConfigurePulse(
+        self, 
+        channel: ChannelType, 
+        pulse_period: Annotated[float, Field(gt=0)], 
+        pulse_width: Annotated[float, Field(gt=0)], 
+        leading_edge: Annotated[float, Field(gt=0)], 
+        trailing_edge: Annotated[float, Field(gt=0)] 
+    ):
+        cmd = f':SOUR{channel}:FUNC:PULS:PER {pulse_period:#.16g};:'
+        cmd += f'SOUR{channel}:FUNC:PULS:WIDT {pulse_width:#.16g};:'
+        cmd += f'SOUR{channel}:FUNC:PULS:TRAN:LEAD {leading_edge:#.16g};:'
+        cmd += f'SOUR{channel}:FUNC:PULS:TRAN:TRA {trailing_edge:#.16g};'
+        
+        self.write(cmd)
+
+    @validate_call    
+    def A33ConfigureRamp(
+        self,
+        channel : ChannelType,
+        ramp_symmetry: Annotated[float, Field(ge=0, le=100)]    
+        ):
+        cmd = f':SOUR{channel}:FUNC:RAMP:SYMM {ramp_symmetry:#.16g};'
+        self.write(cmd)
+
+    @validate_call
+    def A33ConfigureSquare(
+        self,
+        channel : ChannelType,
+        duty_cycle: Annotated[float, Field(ge=0, le=100)]    
+            ):
+        cmd = f':SOUR{channel}:FUNC:SQU:DCYC {duty_cycle:#.16g};'
+        self.write(cmd)
+
+    @validate_call
+    def A33ConfigureTrigger(
+        self, 
+        channel: ChannelType, 
+        trigger_source: Annotated[int, Field(ge=0, le=3)], # ['IMM', 'TIM', 'EXT', 'BUS']
+        trigger_slope: Annotated[int, Field(ge=0, le=1)], # ['POS', 'NEG']
+        delay: Annotated[float, Field(ge=0)], 
+        int_period: Annotated[float, Field(gt=0)], 
+        trigger_level: float 
+    ):
+        trigger_source_str = ['IMM', 'TIM', 'EXT', 'BUS'][trigger_source]
+        trigger_slope_str = ['POS', 'NEG'][trigger_slope]        
+
+        cmd = f':TRIG{channel}:SOUR {trigger_source_str};:'
+        cmd += f'TRIG{channel}:SLOP {trigger_slope_str};:'
+        cmd += f'TRIG{channel}:DEL {delay:#.16g};:'
+        cmd += f'TRIG{channel}:TIM {int_period:#.16g};:'
+        cmd += f'TRIG{channel}:LEV {trigger_level:#.16g};'
+        
+        self.write(cmd)
+
+    def A33ConfigureWFM(
+        self, 
+        channel: ChannelType, 
+        waveform: Annotated[int, Field(ge=0, le=7)], 
+        amplitude: Annotated[float, Field(ge=0)], 
+        dc_offset: float, 
+        frequency_bw_bitrate: Annotated[float, Field(gt=0)], 
+        phase: Annotated[float, Field(ge=-360, le=360)]
+        ):
+        # Map integer to waveform string
+        waveforms = ['SIN', 'SQU', 'PULS', 'RAMP', 'NOIS', 'DC', 'PRBS', 'TRI']
+        waveform_str = waveforms[waveform]
+        
+        cmds = [f"SOUR{channel}:FUNC {waveform_str}"]
+
+        if waveform_str != 'DC':
+            cmds.append(f"SOUR{channel}:VOLT {amplitude:#.16g}")
+            
+        cmds.append(f"SOUR{channel}:VOLT:OFFS {dc_offset:#.16g}")
+
+        if waveform_str == 'NOIS':
+            cmds.append(f"SOUR{channel}:FUNC:NOISE:BAND {frequency_bw_bitrate:#.16g}")
+        elif waveform_str == 'PRBS':
+            cmds.append(f"SOUR{channel}:FUNC:PRBS:BRAT {frequency_bw_bitrate:#.16g}")
+        elif waveform_str != 'DC':
+            cmds.append(f"SOUR{channel}:FREQ {frequency_bw_bitrate:#.16g}")
+
+        if waveform_str not in ['NOIS', 'DC']:        
+            cmds.append(f"SOUR{channel}:PHASE {phase:#.16g}")
+        
+        full_cmd = ':' + ';:'.join(cmds) + ';'
+        self.write(full_cmd)
+
+    @validate_call
+    def A33Initialize(self, reset: bool): 
+        if reset:
+            self.write('*RST')
+            time.sleep(0.5)
+        self.write('*CLS;*ESE 1;*SRE 32;')
+        time.sleep(0.5)        
+        self.write('*WAI;')
+        time.sleep(0.5)
+        self.write(':ROSCillator:SOURce:AUTO  ON;')
+
+
+    @validate_call
+    def A33LoadArbitraryVolat(
+        self, 
+        channel: ChannelType, 
+        arb_number: Literal[1, 2, 3, 4],
+        wfm_column_number: str, 
+        wfm_source: bool, # 0=NORM, 1=INV
+        array_wfm: Annotated[float, Field(gt=0)], 
+    ):
+        None
+
+
+    @validate_call
+    def A33OutputOnOff(
+        self, 
+        channel: ChannelType, 
+        enable_output: bool, 
+        output_mode: bool, # 0=NORM, 1=GATED
+        polarity: bool, # 0=NORM, 1=INV
+        impedance: Annotated[float, Field(gt=0)] 
+    ):
+        polarity_str = ['NORM', 'INV'][int(polarity)]
+        enable_output_str = ['OFF', 'ON'][int(enable_output)]
+        output_mode_str = ['NORM', 'GAT'][int(output_mode)]
+        
+        cmd = f':OUTP{channel}:LOAD {impedance:#.16g};:'
+        cmd+= f'OUTP{channel}:POL {polarity_str};:'
+        cmd+= f'OUTP{channel}:MODE {output_mode_str};:'
+        cmd+= f'OUTP{channel} {enable_output_str};'
+        self.write(cmd)
+
+    @validate_call
+    def A33PhaseSync(self):
+        self.write(':SOUR1:PHASE:SYNC;')
+
+    @validate_call
+    def A33ReadError(self):  
+        err = self.ask('SYST:ERR?')
+        return err
+
+    @validate_call
+    def A33Trg(self):  
+        self.write('*TRG;')
+
+
+        
+    @validate_call
+    def A33LoadARB(self, channel: ChannelType, arb_number: int):
+        visa = self.instr.instr
+        old_timeout = visa.timeout
+        
+        # Build command with *OPC? for synchronization
+        cmd = f':MMEM:LOAD:DATA{channel} "INT:\\332XX_ARBS\\ARBF{arb_number}.ARB";*OPC?'
+        
+        self.write(cmd)
+        visa.timeout = 60_000 # 60s timeout for large file transfer
+        
+        # Read blocks until *OPC? returns '1'
+        response = visa.read()
+        visa.timeout = old_timeout
+        return response
+    
 
 
 
-if __name__=="__main__":
+
+
+# if __name__=="__main__":
     # num_points = 13e6
     # x = np.arange(num_points)
     # data = 1e4*(np.sin(17 * x * (2*np.pi/num_points)) +  np.sin(6 * x * (2 * np.pi /num_points)))
