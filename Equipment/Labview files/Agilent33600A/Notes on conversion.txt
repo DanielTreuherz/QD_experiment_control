@@ -1,0 +1,9 @@
+TCPIP::169.254.49.101::5026::SOCKET
+
+TCPIP::169.254.11.23::INSTR
+AG33600A_Gen1
+
+Notes on testing:
+Array waveform format would be quite difficult to pass through labview to python - is this neccesary? Filepath should work.
+The read error VI - is that ever used in actual experiments? I can pass it back to Labview easily.
+A33ConfigureFM contains SOUR AM - is this a mistake? I think it would only effect things if using frequency modulation source that isn't the default. (Probably internal)
